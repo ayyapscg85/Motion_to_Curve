@@ -210,21 +210,65 @@ def _sample_all_controls(controls, ranges, increment, tick_callback):
     return samples
 
 
+def _dedupe_samples(positions, knots, tol=1e-5):
+    """
+    Collapses consecutive (near-)duplicate positions - e.g. from a held
+    pose where the control doesn't move for several frames, or a control
+    that isn't actually animated across the chosen range at all - since
+    repeated points can make curve fitting (especially EP mode) fail
+    outright on a degenerate/singular fit. Keeps positions and knots in
+    sync (only relevant if this falls back to a CV curve below).
+    """
+    if not positions:
+        return positions, knots
+    tol2 = tol * tol
+    out_pos = [positions[0]]
+    out_knot = [knots[0]]
+    for p, k in zip(positions[1:], knots[1:]):
+        last = out_pos[-1]
+        dist2 = (p[0] - last[0]) ** 2 + (p[1] - last[1]) ** 2 + (p[2] - last[2]) ** 2
+        if dist2 > tol2:
+            out_pos.append(p)
+            out_knot.append(k)
+    return out_pos, out_knot
+
+
 def _build_curve_from_samples(curve_name, positions, knots):
     """
     Builds the curve as an EP (Edit Point) curve - it interpolates exactly
     through every sampled position, the same way Maya's EP Curve Tool
     works, rather than a CV curve where the points become control vertices
-    that a higher-degree curve wouldn't necessarily touch. knots is no
-    longer used here (Maya computes its own chord-length parameterization
-    for -ep curves), but is still accepted so callers don't need to change.
+    that a higher-degree curve wouldn't necessarily touch.
+
+    Consecutive duplicate positions (a held pose, or a control with no
+    actual motion in the given range) are collapsed first, since repeated
+    points are a common cause of EP fitting failing outright. If EP fitting
+    still fails for some other reason, falls back to a CV curve through the
+    same points instead of erroring out - EP is the default because it
+    matches the motion more closely, but a working CV curve beats no curve.
     """
+    positions, knots = _dedupe_samples(positions, knots)
+
     if len(positions) < 2:
-        raise ValueError("only %d sample(s) in range - need at least 2" % len(positions))
+        raise ValueError(
+            "no motion detected in this frame range (every sampled position "
+            "is the same point) - check the control is actually animated here"
+        )
+
     if cmds.objExists(curve_name):
         cmds.delete(curve_name)
+
     degree = min(3, len(positions) - 1)
-    return cmds.curve(degree=degree, editPoint=positions, name=curve_name)
+    try:
+        return cmds.curve(degree=degree, editPoint=positions, name=curve_name)
+    except Exception as exc:
+        cmds.warning(
+            "EP curve fit failed for '%s' (%s) - using a CV curve instead."
+            % (curve_name, exc)
+        )
+        if cmds.objExists(curve_name):
+            cmds.delete(curve_name)
+        return cmds.curve(degree=1, point=positions, knot=knots, name=curve_name)
 
 
 def _setup_control_rig(ctrl, basis, divis, obj_start, obj_end, crv, sub_loc_scale, follow_path_angle):

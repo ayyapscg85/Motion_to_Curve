@@ -3,7 +3,10 @@
 ## v1.0.0 - First release
 
 - Record selected controls' world-space motion into an EP curve (batched
-  sampling across all controls in a single timeline scrub).
+  sampling across all controls in a single timeline scrub). Held poses
+  (repeated consecutive positions) are collapsed before fitting, since
+  repeated points can make EP fitting fail outright; falls back to a CV
+  curve automatically if EP fitting still fails for any other reason.
 - Mstr_Loc / Sub_LocOffset_Grp / Sub_Loc rig travels the curve; rotation is
   baked decoupled from the curve's tangent orientation by default, with an
   optional Follow Path Angle mode to inherit yaw only.
